@@ -11,6 +11,7 @@ globals [
   number-rewired                       ; number of edges that have been rewired
   rewire-one?                          ; these two variables record which button was last pushed
   rewire-all?
+  users-counter
 ]
 
 breed [ users user ]
@@ -19,6 +20,24 @@ breed [ authorities authority ]
 turtles-own [
   distance-from-other-users ; list of distances of this node from other turtles
   my-clustering-coefficient   ; the current clustering coefficient of this node
+]
+
+users-own [
+  id
+  com-id
+  age
+  income
+  education
+  ethnicity
+  owner
+  house-size
+  consumption
+]
+
+authorities-own [
+  auth-size
+  earnings
+  attitude
 ]
 
 links-own [
@@ -45,6 +64,7 @@ to setup
   set infinity 99999      ; this is an arbitrary choice for a large number
   set number-rewired 0    ; initial count of rewired edges
   set highlight-string "" ; clear the highlight monitor
+  set users-counter 0
 
   ; make the nodes and arrange them in a circle in order by who number
   set-default-shape users "circle"
@@ -57,7 +77,17 @@ to setup
     set label-color blue - 2
     ; set energy random (2 * sheep-gain-from-food)
     setxy random-xcor random-ycor
+    set id users-counter
+    set com-id infinity
+    set age random 18 + 72
+    set income random-float 500000
+    set education random 6 ; education level obtained by the user, 1 elementary school, 6 phd
+    set ethnicity random 7 ; here we get the most popolous ethnic groups in the place of interest and number them
+    set owner random 1 ; 1 if owner, 0 if renter or apartment owner
+    set house-size random 10 ; number of rooms
+    set consumption random 10 ; it will be proportional to house-size and electricity price, as in the original model we assume no energy efficiency
 
+    set users-counter users-counter + 1
 
   ]
 
@@ -69,6 +99,10 @@ to setup
     set label-color blue - 2
     ; set energy random (2 * sheep-gain-from-food)
     setxy random-xcor random-ycor
+
+    set auth-size random 10000 ; we need to find this data o smth like that, it's the number of people employed intuitively
+    set earnings random 10000 ; we need to find this data o smth like that
+    set attitude random-float 1 ; this is probably going to be truly random
   ]
 
 
@@ -141,12 +175,12 @@ to rewire-all
 
   ; we keep generating networks until we get a connected one since apl doesn't mean anything
   ; in a non-connected network
-  let connected? false
-  while [ not connected? ] [
+  ;let connected? false
+  ;while [ not connected? ] [
     ; kill the old lattice and create new one
-    ask links [ die ]
-    wire-users-lattice
-    set number-rewired 0
+    ; ask links [ die ]
+    ; wire-users-lattice
+    ; set number-rewired 0
 
     ; ask each link to maybe rewire, according to the rewiring-probability slider
     ask links [
@@ -154,8 +188,8 @@ to rewire-all
     ]
 
     ; if the apl is infinity, it means our new network is not connected. Reset the lattice.
-    ifelse find-average-path-length = infinity [ set connected? false ] [ set connected? true ]
-  ]
+    ; ifelse find-average-path-length = infinity [ set connected? false ] [ set connected? true ]
+  ;]
 
   ; calculate the statistics and visualize the data
   set clustering-coefficient find-clustering-coefficient
@@ -470,21 +504,6 @@ NIL
 NIL
 1
 
-SLIDER
-715
-420
-990
-453
-rewiring-probability
-rewiring-probability
-0
-1
-1.0
-0.01
-1
-NIL
-HORIZONTAL
-
 BUTTON
 715
 200
@@ -616,6 +635,17 @@ count links
 17
 1
 11
+
+INPUTBOX
+575
+500
+727
+560
+rewiring-probability
+0.5
+1
+0
+Number
 
 @#$#@#$#@
 ## WHAT IS IT?
