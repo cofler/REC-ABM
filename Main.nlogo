@@ -23,6 +23,7 @@ turtles-own [
 ]
 
 users-own [
+  ;simi
   id
   com-id
   age
@@ -32,6 +33,10 @@ users-own [
   owner
   house-size
   consumption
+  AW
+  CS
+  PC
+  AB
 ]
 
 authorities-own [
@@ -42,6 +47,7 @@ authorities-own [
 
 links-own [
   rewired? ; keeps track of whether the link has been rewired or not
+  simi;
 ]
 
 
@@ -59,6 +65,7 @@ end
 
 to setup
   clear-all
+  reset-ticks
 
   ; set the global variables
   set infinity 99999      ; this is an arbitrary choice for a large number
@@ -67,7 +74,7 @@ to setup
   set users-counter 0
 
   ; make the nodes and arrange them in a circle in order by who number
-  set-default-shape users "circle"
+  ; set-default-shape users "circle"
 
   create-users num-users  ; create the sheep, then initialize their variables
   [
@@ -83,11 +90,13 @@ to setup
     set income random-float 500000
     set education random 6 ; education level obtained by the user, 1 elementary school, 6 phd
     set ethnicity random 7 ; here we get the most popolous ethnic groups in the place of interest and number them
-    set owner random 1 ; 1 if owner, 0 if renter or apartment owner
+    set owner random-float 1 ; 1 if owner, 0 if renter or apartment owner
     set house-size random 10 ; number of rooms
     set consumption random 10 ; it will be proportional to house-size and electricity price, as in the original model we assume no energy efficiency
-
+    set AW random-float 1 * (1 + education) / 7;
     set users-counter users-counter + 1
+    set CS false
+    set AB random-float 1 * (age + 1) / 90
 
   ]
 
@@ -106,7 +115,7 @@ to setup
   ]
 
 
-  layout-circle (sort users) max-pxcor - 1
+  ; layout-circle (sort users) max-pxcor - 1
 
   ; Create the initial lattice of the users
   wire-users-lattice
@@ -130,33 +139,92 @@ end
 ;; Main Procedures ;;
 ;;;;;;;;;;;;;;;;;;;;;
 
-to rewire-one
-  ; make sure num-turtles is setup correctly else run setup first
-  ; if count turtles != num-users [ setup ]
+to go
 
-  ; record which button was pushed
-  set rewire-one? true
-  set rewire-all? false
+  rewire-all
+  set-links-weights
+  social-influence
+  tick
 
-  let potential-edges links with [ not rewired? ]
-  ifelse any? potential-edges [
-    ask one-of potential-edges [ rewire-me ]
-    ; Calculate the new statistics and update the plots
-    set average-path-length find-average-path-length
-    set clustering-coefficient find-clustering-coefficient
-    update-plots
-  ]
-  [ user-message "all edges have already been rewired once" ]
 end
 
+
+to set-links-weights
+;  ask users [
+;    ask my-links [set simi [1] of myself ]
+;    ]
+
+  ask links [
+    set simi 1 - abs([age] of end1 - [age] of end2) / 24 - abs([income] of end1
+      - [income] of end2) / 600 - abs([education] of end1 - [education] of end2) / 5
+      - abs([ethnicity] of end1 - [ethnicity] of end2) / 24
+  ]
+
+
+
+  ; [[age] of other-end]
+
+end
+
+to-report get-links-simis
+  report sum[simi] of links
+end
+
+to-report get-users-AW
+  report sum[AW] of users
+end
+
+
+to social-influence
+  ask users[
+
+    if AW > random-float 1 and not CS [
+      set CS true
+      set AW AW + 0.1
+    ]
+
+    let temp 0
+
+    ask my-links [
+      set temp temp + simi * [AW] of other-end / 100
+    ]
+
+    set AW temp
+
+    let temp2 0
+
+    ask my-links [
+      set temp temp + simi * (1 - [PC] of other-end ) / 100
+    ]
+
+  ]
+
+end
+
+
+
+
+
+to rewire-all
+
+    ; ask each link to maybe rewire, according to the rewiring-probability slider
+    ask links [
+      if (random-float 1) < rewiring-probability [ rewire-me ]
+    ]
+
+  ; calculate the statistics and visualize the data
+  set clustering-coefficient find-clustering-coefficient
+  set average-path-length find-average-path-length
+  update-plots
+end
 
 to rewire-me ; turtle procedure
   ; node-A remains the same
   let node-A end1
   ; as long as A is not connected to everybody
-  if [ count link-neighbors ] of end1 < (count turtles - 1) [
+  if [ count link-neighbors ] of end1 < (count users - 1) [
     ; find a node distinct from A and not already a neighbor of "A"
-    let node-B one-of turtles with [ (self != node-A) and (not link-neighbor? node-A) ]
+    let node-B one-of users with [ (self != node-A) and (not link-neighbor? node-A) ]
     ; wire the new edge
     ask node-A [ create-link-with node-B [ set color cyan set rewired? true ] ]
 
@@ -165,37 +233,6 @@ to rewire-me ; turtle procedure
   ]
 end
 
-to rewire-all
-  ; confirm we have the right amount of turtles, otherwise reinitialize
-  if count turtles != num-users [ setup ]
-
-  ; record which button was pushed
-  set rewire-one? false
-  set rewire-all? true
-
-  ; we keep generating networks until we get a connected one since apl doesn't mean anything
-  ; in a non-connected network
-  ;let connected? false
-  ;while [ not connected? ] [
-    ; kill the old lattice and create new one
-    ; ask links [ die ]
-    ; wire-users-lattice
-    ; set number-rewired 0
-
-    ; ask each link to maybe rewire, according to the rewiring-probability slider
-    ask links [
-      if (random-float 1) < rewiring-probability [ rewire-me ]
-    ]
-
-    ; if the apl is infinity, it means our new network is not connected. Reset the lattice.
-    ; ifelse find-average-path-length = infinity [ set connected? false ] [ set connected? true ]
-  ;]
-
-  ; calculate the statistics and visualize the data
-  set clustering-coefficient find-clustering-coefficient
-  set average-path-length find-average-path-length
-  update-plots
-end
 
 ;;;;;;;;;;;;;;;;
 ;; Clustering computations ;;
@@ -423,6 +460,34 @@ end
 ;end
 
 
+
+
+
+;to rewire-one
+;  ; make sure num-turtles is setup correctly else run setup first
+;  ; if count turtles != num-users [ setup ]
+;
+;  ; record which button was pushed
+;  set rewire-one? true
+;  set rewire-all? false
+;
+;  let potential-edges links with [ not rewired? ]
+;  ifelse any? potential-edges [
+;    ask one-of potential-edges [ rewire-me ]
+;    ; Calculate the new statistics and update the plots
+;    set average-path-length find-average-path-length
+;    set clustering-coefficient find-clustering-coefficient
+;    update-plots
+;  ]
+;  [ user-message "all edges have already been rewired once" ]
+;end
+;
+;
+
+
+
+
+
 ; Copyright 2015 Uri Wilensky.
 ; See Info tab for full copyright and license.
 @#$#@#$#@
@@ -482,27 +547,9 @@ NIL
 1.0
 true
 false
-"" "if not rewire-one? [ stop ]"
+"" ""
 PENS
-"apl" 1.0 2 -65485 true "" "plotxy number-rewired / count links\n       average-path-length / average-path-length-of-lattice"
-"cc" 1.0 2 -10899396 true "" ";; note: dividing by initial value to normalize the plot\nplotxy number-rewired / count links\n       clustering-coefficient / clustering-coefficient-of-lattice"
-
-BUTTON
-445
-200
-710
-233
-NIL
-rewire-one
-NIL
-1
-T
-OBSERVER
-NIL
-NIL
-NIL
-NIL
-1
+"apl" 1.0 2 -65485 true "" "plot get-users-AW"
 
 BUTTON
 715
@@ -526,8 +573,8 @@ MONITOR
 120
 990
 165
-highlighted node properties
-highlight-string
+NIL
+get-links-simis
 3
 1
 11
@@ -646,6 +693,34 @@ rewiring-probability
 1
 0
 Number
+
+BUTTON
+450
+65
+513
+98
+NIL
+go
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+MONITOR
+450
+180
+650
+225
+NIL
+get-users-AW
+3
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?
