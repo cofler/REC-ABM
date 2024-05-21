@@ -12,6 +12,24 @@ globals [
   rewire-one?                          ; these two variables record which button was last pushed
   rewire-all?
   users-counter
+  energy-per-kw
+  init-install-cost
+  install-cost-per-kw
+  ITC
+  period
+  year
+  e-cost
+  ro
+  ir
+  average-consumption
+
+  ; REC variables
+
+  en-quota
+  cost-quota
+  return
+
+
 ]
 
 breed [ users user ]
@@ -30,19 +48,28 @@ users-own [
   income
   education
   ethnicity
-  owner
   house-size
-  consumption
+  Q
   AW
   CS
   PC
+  O
   AB
+  PG
+  PM
+  AF
+  T
+  AF
+  Pb-install
+  NPV-b
+  NPV-s
+  PInv
+  NPV-rec
 ]
 
 authorities-own [
-  auth-size
-  earnings
-  attitude
+  tot-quotas ; quotas for each project
+  subscribers ; subscribers for each project
 ]
 
 links-own [
@@ -72,9 +99,46 @@ to setup
   set number-rewired 0    ; initial count of rewired edges
   set highlight-string "" ; clear the highlight monitor
   set users-counter 0
+  set energy-per-kw 100 ; to be computed more precisely, it is a fair assumption for now
+  ; other strong assumption, the size of the pv meets 100% of energy requirement - we have to relax this
+  ; It is assumed that an agent's minimum tax liability in the year of purchasing rooftop PV is
+  ; greater than or equal to the corresponding tax rebates it gets from purchasing rooftop PV
+  ; we can relax also this maybe, we have the income anyway
+  ; but keep in mind, we could introduce the Scambio Sul Posto (0.15 euro per kWh) that pays back the electricity,
+  ; therefore even if the self-consumption is not 100% we can still have economic convenience smhw
+  ; this is just an argument for the approximation
 
-  ; make the nodes and arrange them in a circle in order by who number
-  ; set-default-shape users "circle"
+  set e-cost 0.2360 ; still from the GSE document, mercato tutelato prices from 2021, a good reference for a medium price in italy
+  ; what is the trend? before 2021, there was no clear trend, so we can say it is pretty much constant https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_204__custom_11466566/default/line?lang=en
+  ; we use the s2-2021 value, just before the energy crises, a good approximation of today's prices and of a historical trend
+
+  set average-consumption 976 ; annual average domestic consumption for TAA, https://download.terna.it/terna/ANNUARIO%20STATISTICO%202022_8dbd4774c25facd.pdf
+  ; could not find an household average consumption, so we just set the number of people per house,
+  ; their income and then from this we define the household consumption
+  ; note that the TAA is the lowest in north italy, probably due to lower use of electricity in general due to higher use of other energy vectors
+  ; such as gas, because it is a strongly heating oriented region still
+
+
+  set ro 0.05 ; discount rate, set at 5% in the original paper, we keep it like this
+
+
+  set init-install-cost 1600 ; euros, taken from GSE site https://www.gse.it/documenti_site/Documenti%20GSE/Studi%20e%20scenari/National%20Survey%20Report%20PV%20Italy%202022.pdf
+  ; we keep it constant since the time series is showing a slight increase in 2021-2022 but otherwise is constant
+  set ITC [0.70 0.65 0.60 0.55 0.40 0.35 0.30 0.25 0.20 0.15] ; 10 years of simulation
+  set period [0 1 2 3 4 5 6 7 8 9]
+  ; average price decrease from 2014 to 2019 = 2.6% - we use this one
+  set install-cost-per-kw [1600]
+  foreach period [ i ->  set install-cost-per-kw lput (item i install-cost-per-kw  * (1 - 0.026)) install-cost-per-kw]
+  set year item 0 period
+
+  ; detrazioni irpef 70 % 2024, 65 % nel 2025 e poi facciamo ipotesi diminuzione 5 % ogni anno
+  ; assumption: superbonus is not considered for its remaining parts of energy efficiency, etc,
+  ; it is a big simplification, but otherwise it's difficult to compare with RECs
+
+  set ir 0.005
+
+  set en-quota 275
+  set cost-quota 1000
 
   create-users num-users  ; create the sheep, then initialize their variables
   [
@@ -86,18 +150,30 @@ to setup
     setxy random-xcor random-ycor
     set id users-counter
     set com-id infinity
-    set age random 18 + 72
-    set income random-float 500000
-    set education random 6 ; education level obtained by the user, 1 elementary school, 6 phd
+    set age random 6
+    set income random 15
+    set education random 5 ; education level obtained by the user, 1 elementary school, 6 phd
     set ethnicity random 7 ; here we get the most popolous ethnic groups in the place of interest and number them
-    set owner random-float 1 ; 1 if owner, 0 if renter or apartment owner
     set house-size random 10 ; number of rooms
-    set consumption random 10 ; it will be proportional to house-size and electricity price, as in the original model we assume no energy efficiency
-    set AW random-float 1 * (1 + education) / 7;
+    set Q random 10 ; it will be proportional to house-size and electricity price, as in the original model we assume no energy efficiency
+    set AW random-float 1 * (1 + education) / 6;
     set users-counter users-counter + 1
     set CS false
-    set AB random-float 1 * (age + 1) / 90
-
+    set O random-float 1 ; 1 if completely owner, 0 if completely renter or apartment owner
+    set AB random-float 1 * (age + 1) / 7
+    set AF random-float 1 * (income + 1) / 16
+    set T random 4
+    ifelse T = 1
+     [ set PG 0 set PM 0.5 / 100 set PInv 0]
+     [ ifelse T = 2
+      [ set PG 2.6 / 100 set PM 0.25 / 100 set PInv 2 / 100 ]
+      [ ifelse T = 3
+        [ set PG 3.3 / 100 set PM 0.15 / 100 set PInv 3.5 / 100 ]
+        [ if T = 4
+          [ set PG 5 / 100 set PM 0 set PInv 4.5 / 100 ]
+        ]
+      ]
+    ]
   ]
 
   create-authorities num-authorities  ; create the sheep, then initialize their variables
@@ -109,9 +185,7 @@ to setup
     ; set energy random (2 * sheep-gain-from-food)
     setxy random-xcor random-ycor
 
-    set auth-size random 10000 ; we need to find this data o smth like that, it's the number of people employed intuitively
-    set earnings random 10000 ; we need to find this data o smth like that
-    set attitude random-float 1 ; this is probably going to be truly random
+    ; we set the number of quotas on the already realized projects of WeForGreen
   ]
 
 
@@ -144,26 +218,18 @@ to go
   rewire-all
   set-links-weights
   social-influence
+  set year year + 1
   tick
 
 end
 
 
 to set-links-weights
-;  ask users [
-;    ask my-links [set simi [1] of myself ]
-;    ]
-
   ask links [
     set simi 1 - abs([age] of end1 - [age] of end2) / 24 - abs([income] of end1
-      - [income] of end2) / 600 - abs([education] of end1 - [education] of end2) / 5
-      - abs([ethnicity] of end1 - [ethnicity] of end2) / 24
+      - [income] of end2) / 60 - abs([education] of end1 - [education] of end2) / 24
+      - abs([ethnicity] of end1 - [ethnicity] of end2) / 28
   ]
-
-
-
-  ; [[age] of other-end]
-
 end
 
 to-report get-links-simis
@@ -174,33 +240,117 @@ to-report get-users-AW
   report sum[AW] of users
 end
 
-
+; sub-model 1 updates
 to social-influence
   ask users[
 
+    ; update CS
     if AW > random-float 1 and not CS [
       set CS true
       set AW AW + 0.1
     ]
 
-    let temp 0
-
+    ; update AW
+    let temp AW
     ask my-links [
       set temp temp + simi * [AW] of other-end / 100
     ]
-
     set AW temp
 
-    let temp2 0
-
+    ; update PC
+    let temp2 PC
     ask my-links [
-      set temp temp + simi * (1 - [PC] of other-end ) / 100
+      set temp2 temp2 + simi * (1 - [PC] of other-end ) / 100
     ]
+    set PC temp2
+
+  ]
+end
+
+; submodel 2 updates
+to financial-assessment
+
+  ask users [
+
+  ; assessment - buying rooftop PV through up-front cash payment
+  set Pb-install Q * year * (1 - item year ITC)
+
+  let Pb-mbs-list [ 0 ]
+
+  foreach (range 1 25) [ tt ->  set Pb-mbs-list lput ((( 1 + PG ) / ( 1 + ro ) ) ^ ( tt - 1 )) Pb-mbs-list]
+  set Pb-mbs-list 12 * Q * e-cost * Pb-mbs-list
+  let Pb-mbs sum Pb-mbs-list
+
+  let Pb-maint 25 * PM * Pb-install
+
+  set NPV-b Pb-mbs - ( Pb-install + Pb-maint )
+
+  ; assessment - buying rooftop PV through solar loan - assuming monthly 10-year loans
+  let N 120 ; number of payments
+
+  let M-emi Pb-install * ir * ( 1 + ir ) ^ N / ( ( 1 + ir ) ^ N - 1)
+
+  let P-emi-list [ 0 ]
+  foreach (range 1 10) [ tt ->  set P-emi-list lput (1 / ( 1 + ro ) ^ ( tt - 1 )) P-emi-list]
+  set P-emi-list 12 * M-emi * P-emi-list
+  let P-emi sum P-emi-list
+
+  set NPV-s Pb-mbs - ( P-emi + Pb-maint )
+
+  ; assessment - community solar
+  ; it is completely different from the community solar concept explained in the paper
+  ; we assume it's just a collective investment, where however the burocratic part is done
+  ; by the main entity taking part in the organization, which also keeps parts of the benefits
+  ; which are the RECs benefits?
+  ; let us assume that we have a producer (the entity) and some consumers (the users)
+  ; we also assume that the incentives are all redistributed among the partecipants
+  ; this is something probably not really happening in reality, because most of the times
+  ; some of the users are not in the condition to invest in PV panels at all
+  ; we can also think of some ways to have a smaller partecipation quota, e.g. a user
+  ; enters in the REC but asks for a production of only 50% of its consumption, or less,
+  ; so to save money on the initial investment, but still being part of the community
+  ; administrative/management/burocracy costs are not accounted explicitely, but we consider that
+  ; a part of the incentives is dedicated to that, as we will see
+
+  ; let us consider the model of the CommOn Light Project established in Sicily.
+  ; In this case, revenues from the REC go to the organizing entity, that also pays the entire initial
+  ; investment. But in this case the solution is trivial: REC is always winning,
+  ; as long as there's an entity that decides to put all the money and work
+
+  ; Let us consider another case, the WeForGreen model, which is not based on equity principles necessarily,
+  ; it is indeed a project to which everyone can subscribe with a quota, in the case considered (Centenario Luncense #1)
+  ; it is not disclosed how much of the incentives will be given to the partecipants,
+  ; we hypothesize that 50% of revenues is dedicated to administrative and maintenance costs
+  ; however they declare in general that the return on the investment is 3.6% on 20 years,
+  ; and that it produces 1400 MWh in one year, quotas are 700, so each quota has 2 MWh per year, so each quota
+  ; accounts for 166 kWh monthly. Therefore for the average house we need 5 quotas, so 3500 euro of initial investment
+  ; and also here we account 0 energy costs with the said return in 20 years
+  ; the return is stated by the company that manages energy communities, so probably not the most reliable thing, but I guess it can work
+  ; we don't need an actor that collects the users, we just need users to be aware and partecipate
+  ; with the number of quotas they can, to the initiative
+  ; so we can say that all these users fall inside the range of some communities (like 4, we can divide the world in 4 squares)
+  ; and that the entity decides to set up the call for RECs in some or all of these communities
+
+  ; let's start with the full energy consumption coverage approach
+  let II cost-quota * ceiling Q / en-quota
+  ; as in the individual investment case, the different agent types can be used here
+  ; to classify expectations on the investment, which is some sort of PM, and also PG
+
+  ; P-mbs cannot be used as before, but we use P-returns which includes also that
+  ; indeed, in the investment return rate stated by WeForGreen, it is also included the value of the electricity,
+  ; therefore
+
+  let P-returns 25 * ( 1 + PInv ) * II / cost-quota
+
+  set NPV-rec P-returns - II
+
 
   ]
 
-end
 
+
+
+end
 
 
 
