@@ -1,16 +1,10 @@
 globals [
   infinity         ; used to represent the distance between two turtles with no path between them
-  highlight-string ; message that appears on the node properties monitor
 
-  average-path-length-of-lattice       ; average path length of the initial lattice
-  average-path-length                  ; average path length in the current network
-
-  clustering-coefficient-of-lattice    ; the clustering coefficient of the initial lattice
-  clustering-coefficient               ; the clustering coefficient of the current network (avg. across nodes)
+  prob-of-interaction
+  rewiring-probability
 
   number-rewired                       ; number of edges that have been rewired
-  rewire-one?                          ; these two variables record which button was last pushed
-  rewire-all?
   users-counter
   energy-per-kw
   init-install-cost
@@ -18,27 +12,28 @@ globals [
   ITC
   period
   year
+  month
   e-cost
   ro
   ir
   average-consumption
+  AWh
 
   ; REC variables
 
   en-quota
   cost-quota
   return
+  recs-counter
+
+  tot-quotas-list
 
 
 ]
 
 breed [ users user ]
-breed [ authorities authority ]
+breed [ RECs REC ]
 
-turtles-own [
-  distance-from-other-users ; list of distances of this node from other turtles
-  my-clustering-coefficient   ; the current clustering coefficient of this node
-]
 
 users-own [
   ;simi
@@ -49,10 +44,11 @@ users-own [
   education
   ethnicity
   house-size
+  housing-condition
   Q
   AW
   CS
-  PC
+  ; PC
   O
   AB
   PG
@@ -61,19 +57,24 @@ users-own [
   T
   AF
   Pb-install
+  Pb-mbs
+  Pb-maint
+  P-emi
   NPV-b
-  NPV-s
+  NPV-l
   PInv
   NPV-rec
+  potential-REC-id
+  made-choice
 ]
 
-authorities-own [
+RECs-own [
   tot-quotas ; quotas for each project
   subscribers ; subscribers for each project
+  REC-id
 ]
 
 links-own [
-  rewired? ; keeps track of whether the link has been rewired or not
   simi;
 ]
 
@@ -86,20 +87,20 @@ links-own [
 ;; Setup Procedures ;;
 ;;;;;;;;;;;;;;;;;;;;;;
 
-to startup
-  set highlight-string ""
-end
 
 to setup
   clear-all
   reset-ticks
 
+
   ; set the global variables
   set infinity 99999      ; this is an arbitrary choice for a large number
   set number-rewired 0    ; initial count of rewired edges
-  set highlight-string "" ; clear the highlight monitor
   set users-counter 0
-  set energy-per-kw 100 ; to be computed more precisely, it is a fair assumption for now
+  set recs-counter 0
+  set rewiring-probability 0.5
+  set prob-of-interaction 0.5
+  set energy-per-kw 107.1 ; using https://globalsolaratlas.info/ for TAA, we get an average PV output of 3.52 kWh/kWp per day, so 107.1 per month
   ; other strong assumption, the size of the pv meets 100% of energy requirement - we have to relax this
   ; It is assumed that an agent's minimum tax liability in the year of purchasing rooftop PV is
   ; greater than or equal to the corresponding tax rebates it gets from purchasing rooftop PV
@@ -130,7 +131,7 @@ to setup
   set install-cost-per-kw [1600]
   foreach period [ i ->  set install-cost-per-kw lput (item i install-cost-per-kw  * (1 - 0.026)) install-cost-per-kw]
   set year item 0 period
-
+  set month 1
   ; detrazioni irpef 70 % 2024, 65 % nel 2025 e poi facciamo ipotesi diminuzione 5 % ogni anno
   ; assumption: superbonus is not considered for its remaining parts of energy efficiency, etc,
   ; it is a big simplification, but otherwise it's difficult to compare with RECs
@@ -139,57 +140,163 @@ to setup
 
   set en-quota 275
   set cost-quota 1000
+  ; we set the number of quotas looking at the already realized projects of WeForGreen
+  set tot-quotas-list n-values 4 [ 1900 ]  ; for now, we set tot quotas for up to 4 RECs from here - originally from WeForGreen, 700 each
 
-  create-users num-users  ; create the sheep, then initialize their variables
+  set AWh 0.6 ; awareness index threshold
+
+  create-RECs num-RECs
+  [
+    set REC-id recs-counter
+    set tot-quotas item REC-id tot-quotas-list
+    set subscribers 0
+
+    set recs-counter recs-counter + 1
+  ]
+
+  create-users num-users
   [
     set shape "person"
     set color blue
     set size 1.5  ; easier to see
     set label-color blue - 2
-    ; set energy random (2 * sheep-gain-from-food)
     setxy random-xcor random-ycor
     set id users-counter
     set com-id infinity
-    set age random 6
-    set income random 15
-    set education random 5 ; education level obtained by the user, 1 elementary school, 6 phd
-    set ethnicity random 7 ; here we get the most popolous ethnic groups in the place of interest and number them
-    set house-size random 10 ; number of rooms
-    set Q random 10 ; it will be proportional to house-size and electricity price, as in the original model we assume no energy efficiency
-    set AW random-float 1 * (1 + education) / 6;
+    set age 0 ; age taken from Istat again http://dati.istat.it/Index.aspx?QueryId=42869
+    let r random-float 100
+    ifelse r > 16.8 and r <= 30.3
+      [ set age 1 ]
+      [ ifelse r > 30.3 and r <= 46.2
+         [ set age 2 ]
+         [ ifelse r > 46.2 and r <= 65.1
+            [ set age 3 ]
+            [ ifelse r > 65.1 and r <= 80.5
+               [ set age 4 ]
+               [ if r > 80.5
+                 [ set age 5 ]
+               ]
+            ]
+         ]
+      ]
+
+
+    set income 0 ; we use household income quintiles for Trentino from 2017 (last data with statistical significance from Istat for the province), from http://dati.istat.it//Index.aspx?QueryId=34889#
+    let r2 random-float 100
+    ifelse r2 > 13.1 and r2 <= 29.4
+      [ set income 1 ]
+      [ ifelse r2 > 29.4 and r2 <= 50.5
+         [ set income 2 ]
+         [ ifelse r2 > 50.5 and r2 <= 75.8
+            [ set income 3 ]
+            [ if r2 > 75.8
+              [ set income 4 ]
+            ]
+         ]
+      ]
+    set education 0 ; education level obtained by the user, 0 illiterate, 1 elementary school, 2 middle school, 3 high school, 4 bachelor, 5 master/phd - Trentino data http://dati-censimentopopolazione.istat.it/Index.aspx?DataSetCode=DICA_GRADOISTR1
+    let r0 random-float 100
+    ifelse r0 > 6.18 and r0 <= 25.27
+      [ set education 1 ]
+      [ ifelse r0 > 25.27 and r0 <= 53.53
+         [ set education 2 ]
+         [ ifelse r0 > 53.53 and r0 <= 88.61
+            [ set education 3 ]
+            [ ifelse r0 > 88.61 and r0 <= 91.85
+              [ set education 4 ]
+              [ if r0 > 91.85
+                 [ set education 5 ]
+              ]
+            ]
+         ]
+      ]
+
+    set ethnicity 0 ; here we get the 6 most popolous foreign groups in Trentino and number them - https://www.istat.it/it/archivio/270440
+    let r1 random-float 100
+    ifelse r1 > 93.70 and r1 <= 95.74
+      [ set ethnicity 1 ]
+      [ ifelse r1 > 95.74 and r1 <= 96.78
+         [ set ethnicity 2 ]
+         [ ifelse r1 > 96.78 and r1 <= 97.48
+            [ set ethnicity 3 ]
+            [ ifelse r1 > 97.47 and r1 <= 98.07
+              [ set ethnicity 4 ]
+              [ ifelse r1 > 98.07 and r1 <= 98.53
+                 [ set ethnicity 5 ]
+                 [ if r1 > 98.53 and r1 <= 98.98
+                    [ set ethnicity 6 ]
+                 ]
+              ]
+            ]
+
+         ]
+      ]
+    set house-size 1 ; number of persons, 1 to 6, istat again https://esploradati.censimentopopolazione.istat.it/databrowser/#/it/censtest/dashboards
+    let r3 random-float 100
+    ifelse r3 > 38 and r0 <= 65.6
+      [ set house-size 2 ]
+      [ ifelse r3 > 65.6 and r3 <= 81.3
+         [ set house-size 3 ]
+         [ ifelse r3 > 81.3 and r3 <= 94.9
+            [ set house-size 4 ]
+            [ ifelse r3 > 94.9 and r3 <= 98.8
+              [ set house-size 5 ]
+              [ if r3 > 98.8
+                 [ set house-size 6 ]
+              ]
+            ]
+         ]
+      ]
+
+    set Q house-size * average-consumption ; it will be proportional to house-size, as in the original model we assume no energy efficiency
+    set AW random-float 1 * (1 + education) / 6
     set users-counter users-counter + 1
     set CS false
-    set O random-float 1 ; 1 if completely owner, 0 if completely renter or apartment owner
-    set AB random-float 1 * (age + 1) / 7
-    set AF random-float 1 * (income + 1) / 16
+    set O random-float 1 ; higher values of O correspond to stronger agent preference for rooftop PV over RECs
+    let aux random-float 100
+    set housing-condition 0 ; if 0, house owner, if 1 apartment owner, if 2 renter - here we set it based on probabilities defined from statistics ( we'll need to fill in on that )
+    ifelse aux > 30.3 and aux <= 71.7 ; taken from here https://www.istat.it/it/files/2011/01/testointegrale20100226.pdf and here http://dati.istat.it/index.aspx?queryid=24210
+      [ set housing-condition 1 ] ;   owners 71.7, renters 28.3 (third highest value in italy), among owners 42.2 % has a house, others have apartments or other types of buildings
+      [ if aux > 71.7               ;  so, house-owners 30.3, 41.4 apartment-owners, 28.3 renters
+        [ set housing-condition 2 ]
+      ]
+    set AB random-float 1 * (age + 1) / 6
+    set AF random-float 1 * (income + 1) / 5
     set T random 4
     ifelse T = 1
-     [ set PG 0 set PM 0.5 / 100 set PInv 0]
+     [ set PG 0
+        set PM 0.005
+        set PInv 0]
      [ ifelse T = 2
-      [ set PG 2.6 / 100 set PM 0.25 / 100 set PInv 2 / 100 ]
+      [ set PG 0.026
+        set PM 0.0025
+        set PInv 0.002 ]
       [ ifelse T = 3
-        [ set PG 3.3 / 100 set PM 0.15 / 100 set PInv 3.5 / 100 ]
+        [ set PG 0.033
+          set PM 0.0015
+          set PInv 0.004  ]
         [ if T = 4
-          [ set PG 5 / 100 set PM 0 set PInv 4.5 / 100 ]
+          [ set PG 0.05
+            set PM 0 set
+            PInv 0.006  ]
         ]
       ]
+     ]
+    ifelse xcor < 0 and ycor > 0 ; using 4 potential RECs, we assign the areas using the 4 quadrants of the game space
+    [ set potential-REC-id 0 ]
+    [ ifelse xcor > 0 and ycor > 0
+      [ set potential-REC-id 1 ]
+      [ ifelse xcor < 0 and ycor < 0
+        [ set potential-REC-id 2 ]
+        [ set potential-REC-id 3 ]
+      ]
     ]
+    set made-choice 0 ; it becomes 1 if the user joins a REC, 2 if it buys PV with cash, 3 if it buys PV with loan
+
+
+
   ]
 
-  create-authorities num-authorities  ; create the sheep, then initialize their variables
-  [
-    set shape  "circle 2"
-    set color white
-    set size 1.5  ; easier to see
-    set label-color blue - 2
-    ; set energy random (2 * sheep-gain-from-food)
-    setxy random-xcor random-ycor
-
-    ; we set the number of quotas on the already realized projects of WeForGreen
-  ]
-
-
-  ; layout-circle (sort users) max-pxcor - 1
 
   ; Create the initial lattice of the users
   wire-users-lattice
@@ -197,13 +304,6 @@ to setup
   ; Fix the color scheme
   ; ask turtles [ set color gray + 2 ]
   ask links [ set color gray + 2 ]
-
-  ; Calculate the initial average path length and clustering coefficient
-  set average-path-length find-average-path-length
-  set clustering-coefficient find-clustering-coefficient
-
-  set average-path-length-of-lattice average-path-length
-  set clustering-coefficient-of-lattice clustering-coefficient
 
 
 
@@ -215,10 +315,17 @@ end
 
 to go
 
+
   rewire-all
   set-links-weights
   social-influence
-  set year year + 1
+  financial-assessment
+  consumer-decision
+  set month month + 1
+  if month > 12
+      [ set year year + 1
+        set month 1       ]
+  if year = 10 [stop]
   tick
 
 end
@@ -226,9 +333,11 @@ end
 
 to set-links-weights
   ask links [
-    set simi 1 - abs([age] of end1 - [age] of end2) / 24 - abs([income] of end1
-      - [income] of end2) / 60 - abs([education] of end1 - [education] of end2) / 24
-      - abs([ethnicity] of end1 - [ethnicity] of end2) / 28
+    set simi 1 - abs([age] of end1 - [age] of end2) / 20 - abs([income] of end1
+      - [income] of end2) / 16 - abs([education] of end1 - [education] of end2) / 20
+
+    if [ethnicity] of end1 != [ethnicity] of end2
+    [ set simi simi - 0.25  ]
   ]
 end
 
@@ -240,29 +349,57 @@ to-report get-users-AW
   report sum[AW] of users
 end
 
+to-report get-subscribers
+  report sum[subscribers] of RECs
+end
+
+to-report get-PVadopters
+  report count users with [made-choice = 2 or made-choice = 3 ]
+end
+
+
+
+to-report get-quotas
+  report sum[tot-quotas] of RECs
+end
+
+to-report get-tot-kw
+  let tot-kw 0
+  ask users[
+  if made-choice != 0
+    [ set tot-kw tot-kw + Q / energy-per-kw ]
+  ]
+  report tot-kw
+end
+
 ; sub-model 1 updates
 to social-influence
   ask users[
 
     ; update CS
     if AW > random-float 1 and not CS [
-      set CS true
       set AW AW + 0.1
+      set CS true
     ]
 
-    ; update AW
-    let temp AW
-    ask my-links [
-      set temp temp + simi * [AW] of other-end / 100
+    if random-float 1 < prob-of-interaction
+    [
+      ; update AW
+      let temp AW
+      ask my-links [
+        set temp temp + simi * [AW] of other-end / 100
+      ]
+      set AW temp
     ]
-    set AW temp
+
+    if AW > 1 [ set AW 1 ]
 
     ; update PC
-    let temp2 PC
-    ask my-links [
-      set temp2 temp2 + simi * (1 - [PC] of other-end ) / 100
-    ]
-    set PC temp2
+    ; let temp2 PC
+    ; ask my-links [
+    ;   set temp2 temp2 + simi * (1 - [PC] of other-end ) / 100
+    ; ]
+    ; set PC temp2
 
   ]
 end
@@ -273,29 +410,30 @@ to financial-assessment
   ask users [
 
   ; assessment - buying rooftop PV through up-front cash payment
-  set Pb-install Q * year * (1 - item year ITC)
+  set Pb-install ( Q / energy-per-kw * item year install-cost-per-kw * (1 - item year ITC) )
 
   let Pb-mbs-list [ 0 ]
 
   foreach (range 1 25) [ tt ->  set Pb-mbs-list lput ((( 1 + PG ) / ( 1 + ro ) ) ^ ( tt - 1 )) Pb-mbs-list]
-  set Pb-mbs-list 12 * Q * e-cost * Pb-mbs-list
-  let Pb-mbs sum Pb-mbs-list
+    set Pb-mbs-list (map * (n-values length Pb-mbs-list [12 * Q * e-cost]) Pb-mbs-list)
+  set Pb-mbs sum Pb-mbs-list
 
-  let Pb-maint 25 * PM * Pb-install
+  set Pb-maint 25 * PM * Pb-install
 
   set NPV-b Pb-mbs - ( Pb-install + Pb-maint )
 
   ; assessment - buying rooftop PV through solar loan - assuming monthly 10-year loans
   let N 120 ; number of payments
 
-  let M-emi Pb-install * ir * ( 1 + ir ) ^ N / ( ( 1 + ir ) ^ N - 1)
+  let M-emi Pb-install * ir * ( 1 + ir ) ^ N / ( ( 1 + ir ) ^ N - 1 )
 
   let P-emi-list [ 0 ]
   foreach (range 1 10) [ tt ->  set P-emi-list lput (1 / ( 1 + ro ) ^ ( tt - 1 )) P-emi-list]
-  set P-emi-list 12 * M-emi * P-emi-list
-  let P-emi sum P-emi-list
+    set P-emi-list (map * (n-values length P-emi-list [12 * M-emi]) P-emi-list)
+  set P-emi sum P-emi-list
 
-  set NPV-s Pb-mbs - ( P-emi + Pb-maint )
+  set NPV-l Pb-mbs - ( P-emi + Pb-maint )
+
 
   ; assessment - community solar
   ; it is completely different from the community solar concept explained in the paper
@@ -318,7 +456,7 @@ to financial-assessment
   ; as long as there's an entity that decides to put all the money and work
 
   ; Let us consider another case, the WeForGreen model, which is not based on equity principles necessarily,
-  ; it is indeed a project to which everyone can subscribe with a quota, in the case considered (Centenario Luncense #1)
+  ; it is indeed a project to which everyone can subscribe with a quota, in the case considered (Centenario Lucense #1)
   ; it is not disclosed how much of the incentives will be given to the partecipants,
   ; we hypothesize that 50% of revenues is dedicated to administrative and maintenance costs
   ; however they declare in general that the return on the investment is 3.6% on 20 years,
@@ -332,7 +470,7 @@ to financial-assessment
   ; and that the entity decides to set up the call for RECs in some or all of these communities
 
   ; let's start with the full energy consumption coverage approach
-  let II cost-quota * ceiling Q / en-quota
+  ; let II cost-quota * ceiling Q / en-quota
   ; as in the individual investment case, the different agent types can be used here
   ; to classify expectations on the investment, which is some sort of PM, and also PG
 
@@ -340,14 +478,78 @@ to financial-assessment
   ; indeed, in the investment return rate stated by WeForGreen, it is also included the value of the electricity,
   ; therefore
 
-  let P-returns 25 * ( 1 + PInv ) * II / cost-quota
+  let P-returns 25 * ( 1 + PInv ) * ceiling Q / en-quota
 
-  set NPV-rec P-returns - II
+  let disc-list [ 0 ]
+  foreach (range 1 10) [ tt ->  set disc-list lput (1 / ( 1 + ro ) ^ ( tt - 1 )) disc-list]
+  let disc sum disc-list
 
-
+  set NPV-rec P-returns * disc
   ]
 
+end
 
+
+; submodel 3 - consumer agent decision
+to consumer-decision
+
+  ask users [
+    if AW > AWh and made-choice = 0
+    [ ifelse housing-condition != 0 ; renters and apartment-owners checks NPVs for RECs and normal utility electricity at first
+      [ let choice 0
+        if NPV-rec > 0
+        [ ask RECS [ if ( REC-id = ( [potential-REC-id] of myself ) and tot-quotas > ceiling ( [Q] of myself / en-quota ) )
+                     [ set tot-quotas tot-quotas - ceiling ( [Q] of myself / en-quota )
+                       set subscribers subscribers + 1
+                       set choice 1
+                     ]
+                   ]
+        ]
+        set made-choice choice
+      ]
+      [ ; let's deal now with owners
+      let choice 0
+      if NPV-rec > 0 and NPV-b <= 0 and NPV-l <= 0 [set choice 1 ]
+      if NPV-rec <= 0 and NPV-b > 0 and NPV-l <= 0 [set choice 2 ]
+      if NPV-rec <= 0 and NPV-b <= 0 and NPV-l > 0 [set choice 3 ]
+      if choice = 0
+        [
+          ifelse NPV-b > 0 and NPV-l > 0
+          [ ifelse NPV-b > NPV-l [ set choice 2 ] [ set choice 3 ]  ]
+          [ let r random-float 1
+            ifelse r < O
+            [ ifelse NPV-b > 0 [ set choice 2 ] [ set choice 3 ]  ]
+            [ ifelse NPV-b > 0
+              [ ifelse NPV-rec > NPV-b [ set choice 1 ] [ set choice 2 ]  ]
+              [ ifelse NPV-rec > NPV-l [ set choice 1 ] [ set choice 3 ]  ]
+            ]
+          ]
+
+          let r2 random-float 1
+          if r2 > AB [ set choice 1 ]
+        ]
+
+      let aux 0
+      if choice = 1
+        [ ask RECS [ if ( REC-id = ( [potential-REC-id] of myself ) and tot-quotas > ceiling ( [Q] of myself / en-quota ) )
+                     [ set tot-quotas tot-quotas - ceiling ( [Q] of myself / en-quota )
+                       set subscribers subscribers + 1
+                       set aux 1
+                     ]
+
+                   ]
+          set choice aux
+        ]
+
+       set made-choice choice
+
+      ]
+    ]
+    if made-choice = 1 and potential-REC-id = 0 [set color red]
+    if made-choice = 1 and potential-REC-id = 1 [set color green]
+    if made-choice = 1 and potential-REC-id = 2 [set color white]
+    if made-choice = 1 and potential-REC-id = 3 [set color violet]
+  ]
 
 
 end
@@ -357,26 +559,26 @@ end
 
 to rewire-all
 
-    ; ask each link to maybe rewire, according to the rewiring-probability slider
+    ; ask each link to maybe rewire, according to the rewiring-probability
     ask links [
-      if (random-float 1) < rewiring-probability [ rewire-me ]
+     ; if random-float 1 < rewiring-probability [
+      rewire-me
+     ;]
     ]
 
-  ; calculate the statistics and visualize the data
-  set clustering-coefficient find-clustering-coefficient
-  set average-path-length find-average-path-length
   update-plots
 end
 
-to rewire-me ; turtle procedure
+to rewire-me ; user procedure
   ; node-A remains the same
   let node-A end1
+  if random-float 1 > 0.5 [ set node-A end2 ]
   ; as long as A is not connected to everybody
-  if [ count link-neighbors ] of end1 < (count users - 1) [
+  if [ count link-neighbors ] of node-A < (count users - 1) [
     ; find a node distinct from A and not already a neighbor of "A"
-    let node-B one-of users with [ (self != node-A) and (not link-neighbor? node-A) ]
+    let node-B one-of users with [ (self != node-A) and (not link-neighbor? node-A)]
     ; wire the new edge
-    ask node-A [ create-link-with node-B [ set color cyan set rewired? true ] ]
+    ask node-A [ create-link-with node-B ]
 
     set number-rewired number-rewired + 1
     die ; remove the old edge
@@ -384,137 +586,7 @@ to rewire-me ; turtle procedure
 end
 
 
-;;;;;;;;;;;;;;;;
-;; Clustering computations ;;
-;;;;;;;;;;;;;;;;
 
-to-report in-neighborhood? [ hood ]
-  report ( member? end1 hood and member? end2 hood )
-end
-
-
-to-report find-clustering-coefficient
-
-  let cc infinity
-
-  ifelse all? turtles [ count link-neighbors <= 1 ] [
-    ; it is undefined
-    ; what should this be?
-    set cc 0
-  ][
-    let total 0
-    ask turtles with [ count link-neighbors <= 1 ] [ set my-clustering-coefficient "undefined" ]
-    ask turtles with [ count link-neighbors > 1 ] [
-      let hood link-neighbors
-      set my-clustering-coefficient (2 * count links with [ in-neighborhood? hood ] /
-                                         ((count hood) * (count hood - 1)) )
-      ; find the sum for the value at turtles
-      set total total + my-clustering-coefficient
-    ]
-    ; take the average
-    set cc total / count turtles with [count link-neighbors > 1]
-  ]
-
-  report cc
-end
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Path length computations ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-; Procedure to calculate the average-path-length (apl) in the network. If the network is not
-; connected, we return `infinity` since apl doesn't really mean anything in a non-connected network.
-to-report find-average-path-length
-
-  let apl 0
-
-  ; calculate all the path-lengths for each node
-  find-path-lengths
-
-  let num-connected-pairs sum [length remove infinity (remove 0 distance-from-other-users)] of users
-
-  ; In a connected network on N nodes, we should have N(N-1) measurements of distances between pairs.
-  ; If there were any "infinity" length paths between nodes, then the network is disconnected.
-  ifelse num-connected-pairs != (count users * (count users - 1)) [
-    ; This means the network is not connected, so we report infinity
-    set apl infinity
-  ][
-    set apl (sum [sum distance-from-other-users] of users) / (num-connected-pairs)
-  ]
-
-  report apl
-end
-
-; Implements the Floyd Warshall algorithm for All Pairs Shortest Paths
-; It is a dynamic programming algorithm which builds bigger solutions
-; from the solutions of smaller subproblems using memoization that
-; is storing the results. It keeps finding incrementally if there is shorter
-; path through the kth node. Since it iterates over all turtles through k,
-; so at the end we get the shortest possible path for each i and j.
-to find-path-lengths
-  ; reset the distance list
-  ask users [
-    set distance-from-other-users []
-  ]
-
-  let i 0
-  let j 0
-  let k 0
-  let node1 one-of users
-  let node2 one-of users
-  let node-count count users
-  ; initialize the distance lists
-  while [i < node-count] [
-    set j 0
-    while [ j < node-count ] [
-      set node1 user i
-      set node2 user j
-      ; zero from a node to itself
-      ifelse i = j [
-        ask node1 [
-          set distance-from-other-users lput 0 distance-from-other-users
-        ]
-      ][
-        ; 1 from a node to it's neighbor
-        ifelse [ link-neighbor? node1 ] of node2 [
-          ask node1 [
-            set distance-from-other-users lput 1 distance-from-other-users
-          ]
-        ][ ; infinite to everyone else
-          ask node1 [
-            set distance-from-other-users lput infinity distance-from-other-users
-          ]
-        ]
-      ]
-      set j j + 1
-    ]
-    set i i + 1
-  ]
-  set i 0
-  set j 0
-  let dummy 0
-  while [k < node-count] [
-    set i 0
-    while [i < node-count] [
-      set j 0
-      while [j < node-count] [
-        ; alternate path length through kth node
-        set dummy ( (item k [distance-from-other-users] of turtle i) +
-                    (item j [distance-from-other-users] of turtle k))
-        ; is the alternate path shorter?
-        if dummy < (item j [distance-from-other-users] of turtle i) [
-          ask turtle i [
-            set distance-from-other-users replace-item j distance-from-other-users dummy
-          ]
-        ]
-        set j j + 1
-      ]
-      set i i + 1
-    ]
-    set k k + 1
-  ]
-
-end
 
 ;;;;;;;;;;;;;;;;;;;;;
 ;; Edge Operations ;;
@@ -523,117 +595,25 @@ end
 ; creates a new lattice
 to wire-users-lattice
   ; iterate over the turtles
-  let n 0
-  while [ n < count users ] [
-    ; make edges with the next two neighbors
-    ; this makes a lattice with average degree of 4
-    make-edge turtle n
-              turtle ((n + 1) mod count users)
-              "default"
-    ; Make the neighbor's neighbor links curved
-    ;make-edge turtle n
-    ;          turtle ((n + 2) mod count users)
-    ;          "curve"
-    set n n + 1
+  ask users [
+
+    ask min-n-of 2 other users [distance myself]
+    [     make-edge self myself
+    ]
+
+
   ]
 
-  ; Because of the way NetLogo draws curved links between turtles of ascending
-  ; `who` number, two of the links near the top of the network will appear
-  ; flipped by default. To avoid this, we used an inverse curved link shape
-  ; ("curve-a") which makes all of the curves face the same direction.
-  ; ask link 0 (count users - 2) [ set shape "curve-a" ]
-  ; ask link 1 (count users - 1) [ set shape "curve-a" ]
 end
 
 ; Connects two nodes
-to make-edge [ node-A node-B the-shape ]
+to make-edge [ node-A node-B ]
   ask node-A [
     create-link-with node-B  [
-      set shape the-shape
-      set rewired? false
+      set shape "default"
     ]
   ]
 end
-
-;;;;;;;;;;;;;;;;;;
-;; Highlighting ;;
-;;;;;;;;;;;;;;;;;;
-
-;to highlight
-;  ; remove any previous highlights
-;  ask turtles [ set color gray + 2 ]
-;  ask links   [ set color gray + 2 ]
-;
-;  ; if the mouse is in the View, go ahead and highlight
-;  ; if mouse-inside? [ do-highlight ]
-;
-;  ; force updates since we don't use ticks
-;  display
-;end
-
-;to do-highlight
-;  ; getting the node closest to the mouse
-;  let min-d min [ distancexy mouse-xcor mouse-ycor ] of turtles
-;  let node one-of turtles with [count link-neighbors > 0 and distancexy mouse-xcor mouse-ycor = min-d]
-;
-;  if node != nobody [
-;    ; highlight the chosen node
-;    ask node [
-;      set color white
-;      let pairs (length remove infinity distance-from-other-turtles)
-;      let my-apl (sum remove infinity distance-from-other-turtles) / pairs
-;
-;      ; show node's statistics
-;      let coefficient-description ifelse-value my-clustering-coefficient = "undefined"
-;        ["undefined for single-link"]
-;        [precision my-clustering-coefficient 3]
-;      set highlight-string (word "clustering coefficient = " coefficient-description
-;        " and avg path length = " precision my-apl 3
-;        " (for " pairs " turtles )")
-;    ]
-;
-;    let neighbor-nodes [ link-neighbors ] of node
-;    let direct-links [ my-links ] of node
-;
-;    ; highlight neighbors
-;    ask neighbor-nodes [
-;      set color orange
-;      ; highlight edges connecting the chosen node to its neighbors
-;      ask my-links [
-;        ifelse (end1 = node or end2 = node)
-;          [ set color orange ]
-;          [ if (member? end1 neighbor-nodes and member? end2 neighbor-nodes) [ set color yellow ]
-;        ]
-;      ]
-;    ]
-;  ]
-;end
-
-
-
-
-
-;to rewire-one
-;  ; make sure num-turtles is setup correctly else run setup first
-;  ; if count turtles != num-users [ setup ]
-;
-;  ; record which button was pushed
-;  set rewire-one? true
-;  set rewire-all? false
-;
-;  let potential-edges links with [ not rewired? ]
-;  ifelse any? potential-edges [
-;    ask one-of potential-edges [ rewire-me ]
-;    ; Calculate the new statistics and update the plots
-;    set average-path-length find-average-path-length
-;    set clustering-coefficient find-clustering-coefficient
-;    update-plots
-;  ]
-;  [ user-message "all edges have already been rewired once" ]
-;end
-;
-;
-
 
 
 
@@ -644,8 +624,8 @@ end
 GRAPHICS-WINDOW
 10
 50
-438
-479
+414
+455
 -1
 -1
 12.0
@@ -658,12 +638,12 @@ GRAPHICS-WINDOW
 0
 0
 1
--17
-17
--17
-17
-1
-1
+-16
+16
+-16
+16
+0
+0
 0
 ticks
 30.0
@@ -677,7 +657,7 @@ num-users
 num-users
 10
 1000
-30.0
+1000.0
 1
 1
 NIL
@@ -688,7 +668,7 @@ PLOT
 235
 710
 414
-Network Properties Rewire-One
+User's AW
 fraction of edges rewired
 NIL
 0.0
@@ -701,23 +681,6 @@ false
 PENS
 "apl" 1.0 2 -65485 true "" "plot get-users-AW"
 
-BUTTON
-715
-200
-990
-233
-NIL
-rewire-all
-NIL
-1
-T
-OBSERVER
-NIL
-NIL
-NIL
-NIL
-1
-
 MONITOR
 445
 120
@@ -729,34 +692,12 @@ get-links-simis
 1
 11
 
-MONITOR
-50
-485
-222
-530
-clustering-coefficient (cc)
-clustering-coefficient
-3
-1
-11
-
-MONITOR
-225
-485
-397
-530
-average-path-length (apl)
-average-path-length
-3
-1
-11
-
 PLOT
 715
 235
 990
 414
-Network Properties Rewire-All
+RECs total subscriptions
 rewiring probability
 NIL
 0.0
@@ -765,10 +706,11 @@ NIL
 1.0
 true
 false
-"" "if not rewire-all? [ stop ]"
+"" ""
 PENS
-"apl" 1.0 2 -2674135 true "" ";; note: dividing by value at initial value to normalize the plot\nplotxy rewiring-probability\n       average-path-length / average-path-length-of-lattice"
-"cc" 1.0 2 -10899396 true "" ";; note: dividing by initial value to normalize the plot\nplotxy rewiring-probability\n       clustering-coefficient / clustering-coefficient-of-lattice"
+"apl" 1.0 2 -12087248 true "" "plot get-subscribers"
+"pen-1" 1.0 2 -612749 true "" "plot get-PVadopters\n"
+"pen-2" 1.0 2 -4079321 true "" "plot get-PVadopters + get-subscribers"
 
 BUTTON
 11
@@ -812,37 +754,26 @@ SLIDER
 15
 612
 48
-num-authorities
-num-authorities
+num-RECs
+num-RECs
 0
-500
-13.0
+4
+4.0
 1
 1
 NIL
 HORIZONTAL
 
 MONITOR
-160
-540
-232
-585
+65
+480
+137
+525
 NIL
 count links
 17
 1
 11
-
-INPUTBOX
-575
-500
-727
-560
-rewiring-probability
-0.5
-1
-0
-Number
 
 BUTTON
 450
@@ -851,7 +782,7 @@ BUTTON
 98
 NIL
 go
-NIL
+T
 1
 T
 OBSERVER
@@ -869,6 +800,174 @@ MONITOR
 NIL
 get-users-AW
 3
+1
+11
+
+MONITOR
+830
+425
+1040
+470
+owner, REC
+count users with [made-choice = 1 and housing-condition = 0\n]
+17
+1
+11
+
+MONITOR
+830
+470
+1040
+515
+owner, PV buy
+count users with [made-choice = 2 and housing-condition = 0]
+17
+1
+11
+
+MONITOR
+830
+515
+1040
+560
+owner, PV loan
+count users with [made-choice = 3 and housing-condition = 0 ]
+17
+1
+11
+
+MONITOR
+830
+555
+1042
+600
+owner, utility el.
+count users with [made-choice = 0 and housing-condition = 0 ]
+17
+1
+11
+
+MONITOR
+485
+515
+552
+560
+NIL
+year
+17
+1
+11
+
+MONITOR
+625
+515
+682
+560
+NIL
+month
+17
+1
+11
+
+MONITOR
+720
+490
+792
+535
+NIL
+get-quotas
+17
+1
+11
+
+PLOT
+1060
+15
+1260
+165
+quotas
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 1 -5516827 true "" "plot get-quotas"
+
+PLOT
+1080
+240
+1280
+390
+Q of users
+NIL
+NIL
+0.0
+2.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "histogram [Q] of users\n"
+
+MONITOR
+1345
+295
+1417
+340
+NIL
+get-tot-kw
+17
+1
+11
+
+MONITOR
+1085
+425
+1185
+470
+non-owner, REC
+count users with [made-choice = 1 and housing-condition != 0\n]
+17
+1
+11
+
+MONITOR
+1085
+470
+1207
+515
+non-owner, PV buy
+count users with [made-choice = 2 and housing-condition != 0\n]
+17
+1
+11
+
+MONITOR
+1085
+515
+1207
+560
+non-owner, PV-loan
+count users with [made-choice = 3 and housing-condition != 0\n]
+17
+1
+11
+
+MONITOR
+1085
+560
+1212
+605
+non-owner, utility el.
+count users with [made-choice = 0 and housing-condition != 0\n]
+17
 1
 11
 
