@@ -1,6 +1,6 @@
 # REC-ABM
 
-An agent-based model developed starting from the Small-World NetLogo model and taking inspiration from [1], applied to the study-case of the socio-economic conditions of Trento, Trentino-Alto Adige/Sudtirol, Italy.
+An agent-based model developed starting from the Small-World NetLogo model and taking inspiration from [1], applied to the study-case of the socio-economic conditions of the Trentino province, Trentino-Alto Adige/Sudtirol, Italy.
 
 
 
