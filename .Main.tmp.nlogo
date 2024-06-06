@@ -377,7 +377,7 @@ end
 to social-influence
   ask users[
 
-    let see-change-by-other sum [ made-choice-last-time ] of other users with [ com-id = [com-id] of myself and housing-condition = 0 ]
+    let see-change-by-other sum [ made-choice-last-time ] of other users with [ com-id = [com-id] of myself ]
 
     ; set AW AW * ( 1 + see-change-by-other / 100 )
 
