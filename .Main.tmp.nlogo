@@ -18,6 +18,7 @@ globals [
   ir
   average-consumption
   AWh
+  prev-kw
 
   ; REC variables
 
@@ -111,6 +112,8 @@ to setup
   ; therefore even if the self-consumption is not 100% we can still have economic convenience smhw
   ; this is just an argument for the approximation
 
+  set prev-kw 0
+
   set e-cost 0.2360 ;
   ; what is the trend? before 2021, there was no clear trend, so we can say it is pretty much constant https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_204__custom_11466566/default/line?lang=en
   ; we use the s2-2021 value, just before the energy crises, a good approximation of today's prices and of a historical trend
@@ -143,7 +146,7 @@ to setup
   set en-quota 275
   set cost-quota 1000
   ; we set the number of quotas looking at the already realized projects of WeForGreen
-  set tot-quotas-list n-values 4 [  ]  ; for now, we set tot quotas for up to 4 RECs from here - originally from WeForGreen, 700 each
+  set tot-quotas-list n-values 4 [ 1000 ]  ; for now, we set tot quotas for up to 4 RECs from here - originally from WeForGreen, 700 each
 
   set AWh 0.6 ; awareness index threshold
 
@@ -366,7 +369,9 @@ to-report get-tot-kw
   if made-choice != 0
     [ set tot-kw tot-kw + Q / energy-per-kw ]
   ]
-  report tot-kw
+  let installed-kw tot-kw - prev-kw
+  set prev-kw tot-kw
+  report installed-kw
 end
 
 to-report get-visual-influence
@@ -738,8 +743,6 @@ true
 false
 "" ""
 PENS
-"apl" 1.0 2 -12087248 true "" "plot get-subscribers"
-"pen-1" 1.0 2 -612749 true "" "plot get-PVadopters\n"
 "pen-2" 1.0 2 -4079321 true "" "plot get-PVadopters + get-subscribers"
 
 BUTTON
@@ -947,17 +950,6 @@ PENS
 "default" 1.0 0 -16777216 true "" "histogram [Q] of users\n"
 
 MONITOR
-1345
-295
-1417
-340
-NIL
-get-tot-kw
-17
-1
-11
-
-MONITOR
 1085
 425
 1185
@@ -1022,6 +1014,24 @@ get-choices-made
 17
 1
 11
+
+PLOT
+1335
+465
+1535
+615
+plot 1
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot get-tot-kw\n"
 
 @#$#@#$#@
 ## WHAT IS IT?
