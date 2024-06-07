@@ -53,7 +53,6 @@ users-own [
   AB
   PG
   PM
-  AF
   T
   AF
   Pb-install
@@ -67,6 +66,7 @@ users-own [
   potential-REC-id
   made-choice
   made-choice-last-time
+  see-change-by-other
 ]
 
 RECs-own [
@@ -76,6 +76,7 @@ RECs-own [
 ]
 
 links-own [
+  new-link
   simi;
 ]
 
@@ -110,7 +111,7 @@ to setup
   ; therefore even if the self-consumption is not 100% we can still have economic convenience smhw
   ; this is just an argument for the approximation
 
-  set e-cost 0.2360 ; still from the GSE document, mercato tutelato prices from 2021, a good reference for a medium price in italy
+  set e-cost 0.2360 ;
   ; what is the trend? before 2021, there was no clear trend, so we can say it is pretty much constant https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_204__custom_11466566/default/line?lang=en
   ; we use the s2-2021 value, just before the energy crises, a good approximation of today's prices and of a historical trend
 
@@ -267,7 +268,7 @@ to setup
     ifelse T = 1
      [ set PG 0
         set PM 0.005
-        set PInv 0]
+        set PInv -0.005]
      [ ifelse T = 2
       [ set PG 0.026
         set PM 0.0025
@@ -301,11 +302,6 @@ to setup
 
   ; Create the initial lattice of the users
   wire-users-lattice
-
-  ; Fix the color scheme
-  ; ask turtles [ set color gray + 2 ]
-  ask links [ set color gray + 2 ]
-
 
 
 end
@@ -343,7 +339,7 @@ to set-links-weights
 end
 
 to-report get-links-simis
-  report sum[simi] of links
+  report sum[new-link] of links
 end
 
 to-report get-users-AW
@@ -373,13 +369,26 @@ to-report get-tot-kw
   report tot-kw
 end
 
+to-report get-visual-influence
+  report sum[see-change-by-other] of users
+end
+
+to-report get-choices-made
+  report sum[made-choice-last-time] of users
+end
+
+
 ; sub-model 1 updates
 to social-influence
   ask users[
 
-    let see-change-by-other sum [ made-choice-last-time ] of other users with [ com-id = [com-id] of myself and housing-condition = 0 ]
+    ifelse made-choice = 0 [
+    let neighbors-others users in-radius 4
+    set see-change-by-other sum [ made-choice-last-time ] of neighbors-others with [ housing-condition = 0 and ( made-choice = 1 or made-choice = 2 ) ]
+    set AW AW * ( 1 + see-change-by-other / 100 )
+    ]
+    [ set see-change-by-other 0 ]
 
-    ; set AW AW * ( 1 + see-change-by-other / 100 )
 
     ; update CS
     if AW > random-float 1 and not CS [
@@ -392,7 +401,10 @@ to social-influence
       ; update AW
       let temp AW
       ask my-links [
-        set temp temp + simi * [AW] of other-end / 100
+         if new-link = 1
+         [
+          set temp temp + simi * [AW] of other-end / 100
+         ]
       ]
       set AW temp
     ]
@@ -502,7 +514,7 @@ to consumer-decision
 
     if made-choice-last-time = 1 [set made-choice-last-time 0 ]
 
-    if AW > AWh and made-choice = 0
+    if AW > AWh and made-choice = 0 and AF > random-float 1
     [ ifelse housing-condition != 0 ; renters and apartment-owners checks NPVs for RECs and normal utility electricity at first
       [ let choice 0
         if NPV-rec > 0
@@ -552,13 +564,14 @@ to consumer-decision
        set made-choice choice
 
       ]
+       if made-choice != 0 [set made-choice-last-time 1 ]
     ]
     if made-choice = 1 and potential-REC-id = 0 [set color red]
     if made-choice = 1 and potential-REC-id = 1 [set color green]
     if made-choice = 1 and potential-REC-id = 2 [set color white]
     if made-choice = 1 and potential-REC-id = 3 [set color violet]
 
-    if made-choice != 0 [set made-choice-last-time 1 ]
+
   ]
 
 
@@ -572,10 +585,13 @@ to rewire-all
 
     ; ask each link to maybe rewire, according to the rewiring-probability
     ask links [
-     ; if random-float 1 < rewiring-probability [
+     ifelse random-float 1 < rewiring-probability [
       rewire-me
-     ;]
+     ]
+     [ set new-link 0 ]
     ]
+
+    ;ask links [  set new-link 1   ]
 
   update-plots
 end
@@ -589,10 +605,11 @@ to rewire-me ; user procedure
     ; find a node distinct from A and not already a neighbor of "A"
     let node-B one-of users with [ (self != node-A) and (not link-neighbor? node-A)]
     ; wire the new edge
-    ask node-A [ create-link-with node-B ]
+    ask node-A [ create-link-with node-B [ set new-link 1 ] ]
 
     set number-rewired number-rewired + 1
     die ; remove the old edge
+
   ]
 end
 
@@ -622,6 +639,8 @@ to make-edge [ node-A node-B ]
   ask node-A [
     create-link-with node-B  [
       set shape "default"
+      set new-link 1
+      set color gray + 2
     ]
   ]
 end
@@ -769,7 +788,7 @@ num-RECs
 num-RECs
 0
 4
-4.0
+1.0
 1
 1
 NIL
@@ -978,6 +997,28 @@ MONITOR
 605
 non-owner, utility el.
 count users with [made-choice = 0 and housing-condition != 0\n]
+17
+1
+11
+
+MONITOR
+170
+485
+287
+530
+NIL
+get-visual-influence
+17
+1
+11
+
+MONITOR
+170
+550
+277
+595
+NIL
+get-choices-made
 17
 1
 11
