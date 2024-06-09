@@ -18,6 +18,7 @@ globals [
   ir
   average-consumption
   AWh
+  prev-kw
 
   ; REC variables
 
@@ -102,50 +103,24 @@ to setup
   set recs-counter 0
   set rewiring-probability 0.5
   set prob-of-interaction 0.5
-  set energy-per-kw 107.1 ; using https://globalsolaratlas.info/ for TAA, we get an average PV output of 3.52 kWh/kWp per day, so 107.1 per month
-  ; other strong assumption, the size of the pv meets 100% of energy requirement - we have to relax this
-  ; It is assumed that an agent's minimum tax liability in the year of purchasing rooftop PV is
-  ; greater than or equal to the corresponding tax rebates it gets from purchasing rooftop PV
-  ; we can relax also this maybe, we have the income anyway
-  ; but keep in mind, we could introduce the Scambio Sul Posto (0.15 euro per kWh) that pays back the electricity,
-  ; therefore even if the self-consumption is not 100% we can still have economic convenience smhw
-  ; this is just an argument for the approximation
+  set energy-per-kw 107.1 ;
+  set prev-kw 0
 
   set e-cost 0.2360 ;
-  ; what is the trend? before 2021, there was no clear trend, so we can say it is pretty much constant https://ec.europa.eu/eurostat/databrowser/view/nrg_pc_204__custom_11466566/default/line?lang=en
-  ; we use the s2-2021 value, just before the energy crises, a good approximation of today's prices and of a historical trend
-
-  set average-consumption 976 ; annual average domestic consumption for TAA, https://download.terna.it/terna/ANNUARIO%20STATISTICO%202022_8dbd4774c25facd.pdf
-  ; could not find an household average consumption, so we just set the number of people per house,
-  ; their income and then from this we define the household consumption
-  ; note that the TAA is the lowest in north italy, probably due to lower use of electricity in general due to higher use of other energy vectors
-  ; such as gas, because it is a strongly heating oriented region still
-
-
-  set ro 0.05 ; discount rate, set at 5% in the original paper, we keep it like this
-
-
-  set init-install-cost 1600 ; euros, taken from GSE site https://www.gse.it/documenti_site/Documenti%20GSE/Studi%20e%20scenari/National%20Survey%20Report%20PV%20Italy%202022.pdf
-  ; we keep it constant since the time series is showing a slight increase in 2021-2022 but otherwise is constant
-  set ITC [0.70 0.65 0.60 0.55 0.40 0.35 0.30 0.25 0.20 0.15] ; 10 years of simulation
+  set average-consumption 976 ;
+  set ro 0.05 ;
+  set init-install-cost 1600 ;
+  set ITC [0.70 0.65 0.60 0.55 0.40 0.35 0.30 0.25 0.20 0.15] ;
   set period [0 1 2 3 4 5 6 7 8 9]
-  ; average price decrease from 2014 to 2019 = 2.6% - we use this one
   set install-cost-per-kw [1600]
   foreach period [ i ->  set install-cost-per-kw lput (item i install-cost-per-kw  * (1 - 0.026)) install-cost-per-kw]
   set year item 0 period
   set month 1
-  ; detrazioni irpef 70 % 2024, 65 % nel 2025 e poi facciamo ipotesi diminuzione 5 % ogni anno
-  ; assumption: superbonus is not considered for its remaining parts of energy efficiency, etc,
-  ; it is a big simplification, but otherwise it's difficult to compare with RECs
-
-  set ir 0.005
-
+  set ir 0.005109
   set en-quota 275
   set cost-quota 1000
-  ; we set the number of quotas looking at the already realized projects of WeForGreen
-  set tot-quotas-list n-values 4 [ 1900 ]  ; for now, we set tot quotas for up to 4 RECs from here - originally from WeForGreen, 700 each
-
-  set AWh 0.6 ; awareness index threshold
+  set tot-quotas-list n-values 4 [ 1000 ]
+  set AWh 0.6
 
   create-RECs num-RECs
   [
@@ -160,12 +135,12 @@ to setup
   [
     set shape "person"
     set color blue
-    set size 1.5  ; easier to see
+    set size 1.5
     set label-color blue - 2
     setxy random-xcor random-ycor
     set id users-counter
     set com-id infinity
-    set age 0 ; age taken from Istat again http://dati.istat.it/Index.aspx?QueryId=42869
+    set age 0
     let r random-float 100
     ifelse r > 16.8 and r <= 30.3
       [ set age 1 ]
@@ -183,7 +158,7 @@ to setup
       ]
 
 
-    set income 0 ; we use household income quintiles for Trentino from 2017 (last data with statistical significance from Istat for the province), from http://dati.istat.it//Index.aspx?QueryId=34889#
+    set income 0
     let r2 random-float 100
     ifelse r2 > 13.1 and r2 <= 29.4
       [ set income 1 ]
@@ -196,7 +171,7 @@ to setup
             ]
          ]
       ]
-    set education 0 ; education level obtained by the user, 0 illiterate, 1 elementary school, 2 middle school, 3 high school, 4 bachelor, 5 master/phd - Trentino data http://dati-censimentopopolazione.istat.it/Index.aspx?DataSetCode=DICA_GRADOISTR1
+    set education 0
     let r0 random-float 100
     ifelse r0 > 6.18 and r0 <= 25.27
       [ set education 1 ]
@@ -213,7 +188,7 @@ to setup
          ]
       ]
 
-    set ethnicity 0 ; here we get the 6 most popolous foreign groups in Trentino and number them - https://www.istat.it/it/archivio/270440
+    set ethnicity 0
     let r1 random-float 100
     ifelse r1 > 93.70 and r1 <= 95.74
       [ set ethnicity 1 ]
@@ -233,7 +208,7 @@ to setup
 
          ]
       ]
-    set house-size 1 ; number of persons, 1 to 6, istat again https://esploradati.censimentopopolazione.istat.it/databrowser/#/it/censtest/dashboards
+    set house-size 1
     let r3 random-float 100
     ifelse r3 > 38 and r0 <= 65.6
       [ set house-size 2 ]
@@ -250,16 +225,16 @@ to setup
          ]
       ]
 
-    set Q house-size * average-consumption ; it will be proportional to house-size, as in the original model we assume no energy efficiency
+    set Q house-size * average-consumption
     set AW random-float 1 * (1 + education) / 6
     set users-counter users-counter + 1
     set CS false
-    set O random-float 1 ; higher values of O correspond to stronger agent preference for rooftop PV over RECs
+    set O random-float 1
     let aux random-float 100
-    set housing-condition 0 ; if 0, house owner, if 1 apartment owner, if 2 renter - here we set it based on probabilities defined from statistics ( we'll need to fill in on that )
-    ifelse aux > 30.3 and aux <= 71.7 ; taken from here https://www.istat.it/it/files/2011/01/testointegrale20100226.pdf and here http://dati.istat.it/index.aspx?queryid=24210
-      [ set housing-condition 1 ] ;   owners 71.7, renters 28.3 (third highest value in italy), among owners 42.2 % has a house, others have apartments or other types of buildings
-      [ if aux > 71.7               ;  so, house-owners 30.3, 41.4 apartment-owners, 28.3 renters
+    set housing-condition 0
+    ifelse aux > 30.3 and aux <= 71.7
+      [ set housing-condition 1 ]
+      [ if aux > 71.7
         [ set housing-condition 2 ]
       ]
     set AB random-float 1 * (age + 1) / 6
@@ -268,23 +243,23 @@ to setup
     ifelse T = 1
      [ set PG 0
         set PM 0.005
-        set PInv -0.005]
+        set PInv -0.02]
      [ ifelse T = 2
       [ set PG 0.026
         set PM 0.0025
-        set PInv 0.002 ]
+        set PInv 0.02 ]
       [ ifelse T = 3
         [ set PG 0.033
           set PM 0.0015
-          set PInv 0.004  ]
+          set PInv 0.06  ]
         [ if T = 4
           [ set PG 0.05
             set PM 0 set
-            PInv 0.006  ]
+            PInv 0.08  ]
         ]
       ]
      ]
-    ifelse xcor < 0 and ycor > 0 ; using 4 potential RECs, we assign the areas using the 4 quadrants of the game space
+    ifelse xcor < 0 and ycor > 0
     [ set potential-REC-id 0 ]
     [ ifelse xcor > 0 and ycor > 0
       [ set potential-REC-id 1 ]
@@ -293,14 +268,11 @@ to setup
         [ set potential-REC-id 3 ]
       ]
     ]
-    set made-choice 0 ; it becomes 1 if the user joins a REC, 2 if it buys PV with cash, 3 if it buys PV with loan
-
+    set made-choice 0
 
 
   ]
 
-
-  ; Create the initial lattice of the users
   wire-users-lattice
 
 
@@ -366,7 +338,9 @@ to-report get-tot-kw
   if made-choice != 0
     [ set tot-kw tot-kw + Q / energy-per-kw ]
   ]
-  report tot-kw
+  let installed-kw tot-kw - prev-kw
+  set prev-kw tot-kw
+  report installed-kw
 end
 
 to-report get-visual-influence
@@ -451,54 +425,10 @@ to financial-assessment
 
   set NPV-l Pb-mbs - ( P-emi + Pb-maint )
 
-
-  ; assessment - community solar
-  ; it is completely different from the community solar concept explained in the paper
-  ; we assume it's just a collective investment, where however the burocratic part is done
-  ; by the main entity taking part in the organization, which also keeps parts of the benefits
-  ; which are the RECs benefits?
-  ; let us assume that we have a producer (the entity) and some consumers (the users)
-  ; we also assume that the incentives are all redistributed among the partecipants
-  ; this is something probably not really happening in reality, because most of the times
-  ; some of the users are not in the condition to invest in PV panels at all
-  ; we can also think of some ways to have a smaller partecipation quota, e.g. a user
-  ; enters in the REC but asks for a production of only 50% of its consumption, or less,
-  ; so to save money on the initial investment, but still being part of the community
-  ; administrative/management/burocracy costs are not accounted explicitely, but we consider that
-  ; a part of the incentives is dedicated to that, as we will see
-
-  ; let us consider the model of the CommOn Light Project established in Sicily.
-  ; In this case, revenues from the REC go to the organizing entity, that also pays the entire initial
-  ; investment. But in this case the solution is trivial: REC is always winning,
-  ; as long as there's an entity that decides to put all the money and work
-
-  ; Let us consider another case, the WeForGreen model, which is not based on equity principles necessarily,
-  ; it is indeed a project to which everyone can subscribe with a quota, in the case considered (Centenario Lucense #1)
-  ; it is not disclosed how much of the incentives will be given to the partecipants,
-  ; we hypothesize that 50% of revenues is dedicated to administrative and maintenance costs
-  ; however they declare in general that the return on the investment is 3.6% on 20 years,
-  ; and that it produces 1400 MWh in one year, quotas are 700, so each quota has 2 MWh per year, so each quota
-  ; accounts for 166 kWh monthly. Therefore for the average house we need 5 quotas, so 3500 euro of initial investment
-  ; and also here we account 0 energy costs with the said return in 20 years
-  ; the return is stated by the company that manages energy communities, so probably not the most reliable thing, but I guess it can work
-  ; we don't need an actor that collects the users, we just need users to be aware and partecipate
-  ; with the number of quotas they can, to the initiative
-  ; so we can say that all these users fall inside the range of some communities (like 4, we can divide the world in 4 squares)
-  ; and that the entity decides to set up the call for RECs in some or all of these communities
-
-  ; let's start with the full energy consumption coverage approach
-  ; let II cost-quota * ceiling Q / en-quota
-  ; as in the individual investment case, the different agent types can be used here
-  ; to classify expectations on the investment, which is some sort of PM, and also PG
-
-  ; P-mbs cannot be used as before, but we use P-returns which includes also that
-  ; indeed, in the investment return rate stated by WeForGreen, it is also included the value of the electricity,
-  ; therefore
-
-  let P-returns 25 * ( 1 + PInv ) * ceiling Q / en-quota
+  let P-returns ( 1 + PInv ) * ceiling Q / en-quota
 
   let disc-list [ 0 ]
-  foreach (range 1 10) [ tt ->  set disc-list lput (1 / ( 1 + ro ) ^ ( tt - 1 )) disc-list]
+  foreach (range 1 25) [ tt ->  set disc-list lput (1 / ( 1 + ro ) ^ ( tt - 1 )) disc-list]
   let disc sum disc-list
 
   set NPV-rec P-returns * disc
@@ -534,7 +464,7 @@ to consumer-decision
       if NPV-rec <= 0 and NPV-b <= 0 and NPV-l > 0 [set choice 3 ]
       if choice = 0
         [
-          ifelse NPV-b > 0 and NPV-l > 0
+          ifelse NPV-b > 0 and NPV-l > 0 and ( NPV-b > NPV-rec and NPV-l > NPV-rec )
           [ ifelse NPV-b > NPV-l [ set choice 2 ] [ set choice 3 ]  ]
           [ let r random-float 1
             ifelse r < O
@@ -546,7 +476,7 @@ to consumer-decision
           ]
 
           let r2 random-float 1
-          if r2 > AB [ set choice 1 ]
+          if r2 > AB and ( choice = 2 or choice = 3 ) [ set choice 1 ]
         ]
 
       let aux 0
@@ -738,8 +668,6 @@ true
 false
 "" ""
 PENS
-"apl" 1.0 2 -12087248 true "" "plot get-subscribers"
-"pen-1" 1.0 2 -612749 true "" "plot get-PVadopters\n"
 "pen-2" 1.0 2 -4079321 true "" "plot get-PVadopters + get-subscribers"
 
 BUTTON
@@ -788,7 +716,7 @@ num-RECs
 num-RECs
 0
 4
-1.0
+0.0
 1
 1
 NIL
@@ -947,17 +875,6 @@ PENS
 "default" 1.0 0 -16777216 true "" "histogram [Q] of users\n"
 
 MONITOR
-1345
-295
-1417
-340
-NIL
-get-tot-kw
-17
-1
-11
-
-MONITOR
 1085
 425
 1185
@@ -1022,6 +939,24 @@ get-choices-made
 17
 1
 11
+
+PLOT
+1335
+465
+1535
+615
+plot 1
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -16777216 true "" "plot get-tot-kw\n"
 
 @#$#@#$#@
 ## WHAT IS IT?
